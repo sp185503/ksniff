@@ -81,12 +81,18 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 				return err
 			}
 
-			targetPods, err := ksniff.fetchPods()
-			if err != nil {
+			// if viper.GetString("label") != "" {
+			// targetPods, err := ksniff.fetchPods()
+			// if err != nil {
+			// 	return err
+			// }
+			// log.Printf("targetPods: %v", targetPods)
+
+			if err := ksniff.fetchPods(); err != nil {
 				return err
 			}
 
-			log.Printf("targetPods: %v", targetPods)
+			//log.Printf("targetPods: %v", o.settings.PodSlice)
 
 			if err := ksniff.Validate(); err != nil {
 				return err
@@ -158,27 +164,28 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 }
 
 //fetchPods fetches the pods that match the label
-func (o *Ksniff) fetchPods() ([]string, error) {
+func (o *Ksniff) fetchPods() error {
 
 	//Slice for collecting the pods in interest
-	var targetPods []string
+	//var targetPods []string
 
 	log.Printf("namespace %v", o.settings.UserSpecifiedNamespace)
 	//fetch pods
 	pods, err := o.clientset.CoreV1().Pods(o.settings.UserSpecifiedNamespace).List(v1.ListOptions{LabelSelector: o.settings.UserSpecifiedLabel})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	for _, pod := range pods.Items {
-		targetPods = append(targetPods, pod.Name)
+	if len(pods.Items) != 0 {
+		for _, pod := range pods.Items {
+			//targetPods = append(targetPods, pod.Name)
+			o.settings.PodSlice = append(o.settings.PodSlice, pod.Name)
+		}
 	}
 
-	if len(targetPods) == 0 {
-		return nil, errors.New("no pods found")
-	}
+	fmt.Printf("Pods: %v", o.settings.PodSlice)
 
-	return targetPods, nil
+	return nil
 }
 
 func (o *Ksniff) Complete(cmd *cobra.Command, args []string) error {
