@@ -287,6 +287,7 @@ func (o *Ksniff) buildTcpdumpBinaryPathLookupList() ([]string, error) {
 //ValidatePods validates a provided pod
 func (o *Ksniff) ValidatePods(podName string, namespace string) error {
 
+	log.Print(podName, namespace)
 	pod, err := o.clientset.CoreV1().Pods(namespace).Get(podName, v1.GetOptions{})
 	if err != nil {
 		return err
@@ -354,8 +355,9 @@ func (o *Ksniff) Validate() error {
 
 	} else {
 		log.Info("capturing on a single pod")
-		if err := o.ValidatePods(o.settings.UserSpecifiedPodName, o.settings.UserSpecifiedNamespace); err != nil {
-			return err
+		if err := o.ValidatePods(o.settings.PodFlag, o.settings.UserSpecifiedNamespace); err != nil {
+			//return fmt.Errorf("error searching for individual pod, %v", err)
+			return errors.Errorf("ValidatePods: %v", err)
 		}
 	}
 	// pod, err := o.clientset.CoreV1().Pods(o.settings.UserSpecifiedNamespace).Get(o.settings.UserSpecifiedPodName, v1.GetOptions{})
