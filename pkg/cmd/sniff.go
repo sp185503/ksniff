@@ -81,17 +81,6 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 				return err
 			}
 
-			// if viper.GetString("label") != "" {
-			// targetPods, err := ksniff.fetchPods()
-			// if err != nil {
-			// 	return err
-			// }
-			// log.Printf("targetPods: %v", targetPods)
-
-			if err := ksniff.fetchPods(); err != nil {
-				return err
-			}
-
 			//log.Printf("targetPods: %v", o.settings.PodSlice)
 
 			if err := ksniff.Validate(); err != nil {
@@ -108,6 +97,10 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&ksniffSettings.UserSpecifiedLabel, "label", "", "", "label (optional)")
 	_ = viper.BindEnv("label", "KUBECTL_PLUGINS_LABEL")
 	_ = viper.BindPFlag("label", cmd.Flags().Lookup("label"))
+
+	cmd.Flags().StringVarP(&ksniffSettings.PodFlag, "pod", "", "", "pod (optional)")
+	_ = viper.BindEnv("pod", "KUBECTL_PLUGINS_POD")
+	_ = viper.BindPFlag("pod", cmd.Flags().Lookup("pod"))
 
 	cmd.Flags().StringVarP(&ksniffSettings.UserSpecifiedNamespace, "namespace", "n", "default", "namespace (optional)")
 	_ = viper.BindEnv("namespace", "KUBECTL_PLUGINS_CURRENT_NAMESPACE")
@@ -166,10 +159,6 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 //fetchPods fetches the pods that match the label
 func (o *Ksniff) fetchPods() error {
 
-	//Slice for collecting the pods in interest
-	//var targetPods []string
-
-	log.Printf("namespace %v", o.settings.UserSpecifiedNamespace)
 	//fetch pods
 	pods, err := o.clientset.CoreV1().Pods(o.settings.UserSpecifiedNamespace).List(v1.ListOptions{LabelSelector: o.settings.UserSpecifiedLabel})
 	if err != nil {
@@ -181,6 +170,8 @@ func (o *Ksniff) fetchPods() error {
 			//targetPods = append(targetPods, pod.Name)
 			o.settings.PodSlice = append(o.settings.PodSlice, pod.Name)
 		}
+	} else {
+		return errors.New("no containers in specified pod")
 	}
 
 	fmt.Printf("Pods: %v", o.settings.PodSlice)
@@ -190,16 +181,7 @@ func (o *Ksniff) fetchPods() error {
 
 func (o *Ksniff) Complete(cmd *cobra.Command, args []string) error {
 
-	if len(args) < minimumNumberOfArguments {
-		_ = cmd.Usage()
-		return errors.New("not enough arguments")
-	}
-
-	o.settings.UserSpecifiedPodName = args[0]
-	if o.settings.UserSpecifiedPodName == "" {
-		return errors.New("pod name is empty")
-	}
-
+	o.settings.PodFlag = viper.GetString("pod")
 	o.settings.UserSpecifiedLabel = viper.GetString("label")
 	o.settings.UserSpecifiedNamespace = viper.GetString("namespace")
 	o.settings.UserSpecifiedContainer = viper.GetString("container")
@@ -271,6 +253,14 @@ func (o *Ksniff) Complete(cmd *cobra.Command, args []string) error {
 		o.snifferService = sniffer.NewUploadTcpdumpRemoteSniffingService(o.settings, kubernetesApiService)
 	}
 
+	//search pods by label
+	if o.settings.UserSpecifiedLabel != "" {
+		log.Info("searching for pods with a label")
+		if err := o.fetchPods(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -294,25 +284,10 @@ func (o *Ksniff) buildTcpdumpBinaryPathLookupList() ([]string, error) {
 		filepath.Join("/usr/local/bin/", tcpdumpBinaryName), kubeKsniffPluginFolder), nil
 }
 
-func (o *Ksniff) Validate() error {
-	if len(o.rawConfig.CurrentContext) == 0 {
-		return errors.New("context doesn't exist")
-	}
+//ValidatePods validates a provided pod
+func (o *Ksniff) ValidatePods(podName string, namespace string) error {
 
-	if o.settings.UserSpecifiedNamespace == "" {
-		return errors.New("namespace value is empty should be custom or default")
-	}
-
-	var err error
-
-	o.settings.UserSpecifiedLocalTcpdumpPath, err = findLocalTcpdumpBinaryPath()
-	if err != nil {
-		return err
-	}
-
-	log.Infof("using tcpdump path at: '%s'", o.settings.UserSpecifiedLocalTcpdumpPath)
-
-	pod, err := o.clientset.CoreV1().Pods(o.settings.UserSpecifiedNamespace).Get(o.settings.UserSpecifiedPodName, v1.GetOptions{})
+	pod, err := o.clientset.CoreV1().Pods(namespace).Get(podName, v1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -347,6 +322,77 @@ func (o *Ksniff) Validate() error {
 	if !containerFoundInPod {
 		return errors.Errorf("couldn't find container: '%s' in pod: '%s'", o.settings.UserSpecifiedContainer, o.settings.UserSpecifiedPodName)
 	}
+
+	return nil
+}
+
+func (o *Ksniff) Validate() error {
+	if len(o.rawConfig.CurrentContext) == 0 {
+		return errors.New("context doesn't exist")
+	}
+
+	if o.settings.UserSpecifiedNamespace == "" {
+		return errors.New("namespace value is empty should be custom or default")
+	}
+
+	var err error
+
+	o.settings.UserSpecifiedLocalTcpdumpPath, err = findLocalTcpdumpBinaryPath()
+	if err != nil {
+		return err
+	}
+
+	log.Infof("using tcpdump path at: '%s'", o.settings.UserSpecifiedLocalTcpdumpPath)
+
+	if len(o.settings.PodSlice) != 0 {
+		log.Info("capturing on all pods")
+		for _, pod := range o.settings.PodSlice {
+			if err := o.ValidatePods(pod, o.settings.UserSpecifiedNamespace); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		log.Info("capturing on a single pod")
+		if err := o.ValidatePods(o.settings.UserSpecifiedPodName, o.settings.UserSpecifiedNamespace); err != nil {
+			return err
+		}
+	}
+	// pod, err := o.clientset.CoreV1().Pods(o.settings.UserSpecifiedNamespace).Get(o.settings.UserSpecifiedPodName, v1.GetOptions{})
+	// if err != nil {
+	// 	return err
+	// }
+
+	// if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+	// 	return errors.Errorf("cannot sniff on a container in a completed pod; current phase is %s", pod.Status.Phase)
+	// }
+
+	// o.settings.DetectedPodNodeName = pod.Spec.NodeName
+
+	// log.Debugf("pod '%s' status: '%s'", o.settings.UserSpecifiedPodName, pod.Status.Phase)
+
+	// if len(pod.Spec.Containers) < 1 {
+	// 	return errors.New("no containers in specified pod")
+	// }
+
+	// if o.settings.UserSpecifiedContainer == "" {
+	// 	log.Info("no container specified, taking first container we found in pod.")
+	// 	o.settings.UserSpecifiedContainer = pod.Spec.Containers[0].Name
+	// 	log.Infof("selected container: '%s'", o.settings.UserSpecifiedContainer)
+	// }
+
+	// var containerFoundInPod = false
+	// for _, containerStatus := range pod.Status.ContainerStatuses {
+	// 	if o.settings.UserSpecifiedContainer == containerStatus.Name {
+	// 		o.settings.DetectedContainerId = strings.TrimPrefix(containerStatus.ContainerID, "docker://")
+	// 		containerFoundInPod = true
+	// 		break
+	// 	}
+	// }
+
+	// if !containerFoundInPod {
+	// 	return errors.Errorf("couldn't find container: '%s' in pod: '%s'", o.settings.UserSpecifiedContainer, o.settings.UserSpecifiedPodName)
+	// }
 
 	return nil
 }

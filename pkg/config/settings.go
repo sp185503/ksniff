@@ -5,6 +5,7 @@ import (
 )
 
 type KsniffSettings struct {
+	PodFlag                        string
 	UserSpecifiedLabel             string
 	UserSpecifiedPodName           string
 	UserSpecifiedInterface         string
