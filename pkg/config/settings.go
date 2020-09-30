@@ -20,6 +20,7 @@ type KsniffSettings struct {
 	DetectedContainerId            string
 	Image                          string
 	UserSpecifiedKubeContext       string
+	PodSlice                       []string
 }
 
 func NewKsniffSettings(streams genericclioptions.IOStreams) *KsniffSettings {
