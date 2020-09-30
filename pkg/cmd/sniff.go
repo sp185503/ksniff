@@ -50,6 +50,12 @@ type Ksniff struct {
 	snifferService   sniffer.SnifferService
 }
 
+//PodInfo to collect pod data and configure the capture
+type PodInfo struct {
+	Name          string `json:"name"`
+	//Node          string `json:"node"`
+}
+
 func NewKsniff(settings *config.KsniffSettings) *Ksniff {
 	return &Ksniff{settings: settings, configFlags: genericclioptions.NewConfigFlags(true)}
 }
@@ -65,9 +71,20 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 		Example:      ksniffExample,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
+
+			//
+			// if err := ksniff.fetchPods(c, args); err != nil {
+			// 	return err
+			// }
+			podMap, err := ksniff.fetchPods(c, args)
+			if err != nil {
+				return err
+			}
+
 			if err := ksniff.Complete(c, args); err != nil {
 				return err
 			}
+
 			if err := ksniff.Validate(); err != nil {
 				return err
 			}
@@ -78,6 +95,10 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&ksniffSettings.UserSpecifiedLabel, "label", "l", "", "label (optional)")
+	_ = viper.BindEnv("label", "KUBECTL_PLUGINS_LABEL")
+	_ = viper.BindPFlag("label", cmd.Flags().Lookup("label"))
 
 	cmd.Flags().StringVarP(&ksniffSettings.UserSpecifiedNamespace, "namespace", "n", "default", "namespace (optional)")
 	_ = viper.BindEnv("namespace", "KUBECTL_PLUGINS_CURRENT_NAMESPACE")
@@ -132,6 +153,49 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 
 	return cmd
 }
+
+//fetchPods fetches the pods that match the label
+func (o *Ksniff) fetchPods(label string, namespace string) map[string][]models.PodInfo, error {
+
+	//setup connection to kube API
+	clientset, err := setupKubeClient()
+	if err != nil {
+		return {}, err
+	}
+
+	//fetch pods
+	pods, err := clientset.CoreV1().Pods(namespace).List(metav1.ListOptions{LabelSelector: label})
+	if len(pods.Items) == 0 {
+		shared.LogMessage("ERROR", label+" not found")
+	}
+	if errors.IsNotFound(err) {
+		log.Fatal("Pod not found\n")
+		//logMessage("ERROR", "Pod not found")
+	} else if statusError, isStatus := err.(*errors.StatusError); isStatus {
+		log.Fatalf("Error getting pod %v\n", statusError.ErrStatus.Message)
+	} else if err != nil {
+		panic(err.Error())
+	}
+
+	//This map uses the capture pods as the keys
+	podMap := make(map[string][]models.PodInfo)
+	for _, pod := range pods.Items {
+		//LETS fetch the capture pod that exist on the same node as the requested pod.
+		capturePods, err := clientset.CoreV1().Pods(os.Getenv("CAPTURE_PODS_NAMESPACE")).List(metav1.ListOptions{
+			LabelSelector: os.Getenv("CAPTURE_PODS"), FieldSelector: "spec.nodeName=" + pod.Spec.NodeName,
+		})
+		if err != nil {
+			panic(err.Error())
+		} else {
+			log.Println(label + " deployment found")
+
+		}
+		//podMap[capturePods.Items[0].Name] = append(podMap[capturePods.Items[0].Name], models.PodInfo{Name: pod.Name, IP: pod.Status.PodIP})
+		podMap[capturePods.Items[0].Status.PodIP] = append(podMap[capturePods.Items[0].Status.PodIP], models.PodInfo{Name: pod.Name, IP: pod.Status.PodIP})
+	}
+	return podMap, nil
+}
+
 
 func (o *Ksniff) Complete(cmd *cobra.Command, args []string) error {
 
