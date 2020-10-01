@@ -72,23 +72,26 @@ func NewCmdSniff(streams genericclioptions.IOStreams) *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 
-			//
-			// if err := ksniff.fetchPods(c, args); err != nil {
-			// 	return err
-			// }
-
 			if err := ksniff.Complete(c, args); err != nil {
 				return err
 			}
 
-			//log.Printf("targetPods: %v", o.settings.PodSlice)
-
 			if err := ksniff.Validate(); err != nil {
 				return err
 			}
-			// if err := ksniff.Run(); err != nil {
-			// 	return err
-			// }
+
+			// run the capture on multiple pods otherwise on a single pod
+			if len(ksniff.settings.PodSlice) > 0 {
+				for _, pod := range ksniff.settings.PodSlice {
+					if err := ksniff.MultiRun(pod); err != nil {
+						return err
+					}
+				}
+			} else {
+				if err := ksniff.Run(); err != nil {
+					return err
+				}
+			}
 
 			return nil
 		},
@@ -173,8 +176,6 @@ func (o *Ksniff) fetchPods() error {
 	} else {
 		return errors.New("no containers in specified pod")
 	}
-
-	fmt.Printf("Pods: %v", o.settings.PodSlice)
 
 	return nil
 }
@@ -480,6 +481,79 @@ func (o *Ksniff) Run() error {
 			return err
 		}
 	}
+
+	return nil
+}
+
+//MultiRun captures on multiple pods
+func (o *Ksniff) MultiRun(podName string) error {
+	log.Infof("sniffing on pod: '%s' [namespace: '%s', container: '%s', filter: '%s', interface: '%s']",
+		podName, o.settings.UserSpecifiedNamespace, o.settings.UserSpecifiedContainer, o.settings.UserSpecifiedFilter, o.settings.UserSpecifiedInterface)
+
+	err := o.snifferService.Setup()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		log.Info("starting sniffer cleanup")
+
+		err := o.snifferService.Cleanup()
+		if err != nil {
+			log.WithError(err).Error("failed to teardown sniffer, a manual teardown is required.")
+			return
+		}
+
+		log.Info("sniffer cleanup completed successfully")
+	}()
+
+	//create output file name
+	o.settings.UserSpecifiedOutputFile = podName + ".pcap"
+	//if o.settings.UserSpecifiedOutputFile != "" {
+	log.Infof("output file option specified, storing output in: '%s'", o.settings.UserSpecifiedOutputFile)
+
+	//var err error
+	var fileWriter io.Writer
+
+	if o.settings.UserSpecifiedOutputFile == "-" {
+		fileWriter = os.Stdout
+	} else {
+		fileWriter, err = os.Create(o.settings.UserSpecifiedOutputFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = o.snifferService.Start(fileWriter)
+	if err != nil {
+		return err
+	}
+
+	//}
+	// else {
+	// 	log.Info("spawning wireshark!")
+
+	// 	title := fmt.Sprintf("gui.window_title:%s/%s/%s", o.settings.UserSpecifiedNamespace, o.settings.UserSpecifiedPodName, o.settings.UserSpecifiedContainer)
+	// 	cmd := exec.Command("wireshark", "-k", "-i", "-", "-o", title)
+
+	// 	stdinWriter, err := cmd.StdinPipe()
+	// 	if err != nil {
+	// 		return err
+	// 	}
+
+	// 	go func() {
+	// 		err := o.snifferService.Start(stdinWriter)
+	// 		if err != nil {
+	// 			log.WithError(err).Errorf("failed to start remote sniffing, stopping wireshark")
+	// 			_ = cmd.Process.Kill()
+	// 		}
+	// 	}()
+
+	// 	err = cmd.Run()
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	return nil
 }
